@@ -1,0 +1,12 @@
+sources/
+*.html
+config/config.php
+js
+test*
+tmp*
+tools/refemu/refemu
+CLAUDE.md
+.claude/
+MILNIKY.md
+ZADANI.md
+*.log

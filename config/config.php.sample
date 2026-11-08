@@ -1,0 +1,10 @@
+<?php
+
+  // public name of the game (internal project name is "spaceinvaders"; the
+  // public name/domain is still undecided, see GAME-DESIGN.md chap. 11)
+  $appPublicName = 'SPACE INVADERS';
+
+  $dbHostname = 'localhost';
+  $dbName = 'spaceinvaders';
+  $dbUser = 'your-user-name';
+  $dbPassword = 'your-password';
