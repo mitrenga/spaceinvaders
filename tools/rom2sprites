@@ -1,0 +1,115 @@
+#!/usr/bin/env node
+/**
+ * rom2sprites — extracts column-oriented 1-bpp sprites and an 8x8 font from an
+ * arcade ROM into svision sprite JSON (grids of '#'/'-', the SpriteEntity
+ * setGraphicsData() format).
+ *
+ * usage: rom2sprites <spec.json>
+ *
+ * The spec (paths relative to the spec file):
+ * {
+ *   "romDir": "../sources/rom/invaders",
+ *   "romFiles": ["invaders.h", "invaders.g", ...],   concatenated in this order
+ *   "bitOrder": "bottom",        bit 0 of the first byte of a column = bottom pixel
+ *                                (Space Invaders / Midway 8080 raster, rotated
+ *                                monitor); "top" = bit 7 first byte is the top pixel
+ *   "outputs": {
+ *     "<file.json>": {
+ *       "sprites": {
+ *         "<name>": {"address": "0x1C00", "columns": 16, "bytesPerColumn": 1,
+ *                    "frames": 2, "frameStride": "0x30", "note": "..."}
+ *       },
+ *       "font": {"address": "0x1E00", "count": 64, "width": 8,
+ *                "codes": {"A": 0, ...}}     code -> character (only listed codes)
+ *     }
+ *   }
+ * }
+ * Sprite object: {width, height, frames, directions, penChar, sprite: [grid...]}
+ * (frames >= 1 => sprite is an array of frame grids). Font object: {width, height,
+ * codes, glyphs: {char: grid}, hexRows: {char: row-major hex, bit 7 = left}}.
+ */
+const fs = require('fs');
+const path = require('path');
+
+const specFile = process.argv[2];
+if (!specFile) {
+  console.error('usage: rom2sprites <spec.json>');
+  process.exit(1);
+}
+const specDir = path.dirname(path.resolve(specFile));
+const spec = JSON.parse(fs.readFileSync(specFile, 'utf8'));
+const rom = Buffer.concat(spec.romFiles.map((f) => fs.readFileSync(path.join(specDir, spec.romDir, f))));
+const bottomFirst = (spec.bitOrder || 'bottom') === 'bottom';
+const num = (v) => (typeof v === 'string') ? parseInt(v, 16) : v;
+
+// one frame: `columns` columns of `bpc` bytes, column-major in ROM
+function decodeFrame(address, columns, bpc) {
+  const height = bpc*8;
+  const grid = Array.from({length: height}, () => Array(columns).fill('-'));
+  for (let c = 0; c < columns; c++) {
+    for (let j = 0; j < bpc; j++) {
+      const byte = rom[address+c*bpc+j];
+      for (let b = 0; b < 8; b++) {
+        if (byte & (1 << b)) {
+          const row = bottomFirst ? height-1-(j*8+b) : j*8+(7-b);
+          grid[row][c] = '#';
+        }
+      }
+    }
+  }
+  return grid.map((row) => row.join(''));
+}
+
+function hexRows(grid) {
+  return grid.map((row) => {
+    let v = 0;
+    for (let x = 0; x < 8; x++) {
+      if (row[x] === '#') {
+        v |= 0x80 >> x;
+      }
+    }
+    return v.toString(16).toUpperCase().padStart(2, '0');
+  }).join('');
+}
+
+Object.entries(spec.outputs).forEach(([outFile, def]) => {
+  const out = {};
+  if (def.sprites) {
+    out.sprites = {};
+    Object.entries(def.sprites).forEach(([name, s]) => {
+      const address = num(s.address);
+      const bpc = s.bytesPerColumn || 1;
+      const frames = s.frames || 1;
+      const stride = s.frameStride ? num(s.frameStride) : s.columns*bpc;
+      const grids = [];
+      for (let f = 0; f < frames; f++) {
+        grids.push(decodeFrame(address+f*stride, s.columns, bpc));
+      }
+      out.sprites[name] = {
+        width: s.columns,
+        height: bpc*8,
+        frames: frames,
+        directions: 1,
+        penChar: '#',
+        sprite: grids,
+        source: {address: '0x'+address.toString(16).toUpperCase().padStart(4, '0'), bytes: frames*stride, note: s.note || ''}
+      };
+    });
+  }
+  if (def.font) {
+    const f = def.font;
+    const address = num(f.address);
+    const width = f.width || 8;
+    out.font = {width: width, height: 8, codes: {}, glyphs: {}, hexRows: {}, source: {address: '0x'+address.toString(16).toUpperCase(), note: f.note || ''}};
+    Object.entries(f.codes).forEach(([ch, code]) => {
+      const grid = decodeFrame(address+code*width, width, 1);
+      out.font.codes[ch] = code;
+      out.font.glyphs[ch] = grid;
+      out.font.hexRows[ch] = hexRows(grid);
+    });
+  }
+  const target = path.join(specDir, outFile);
+  fs.mkdirSync(path.dirname(target), {recursive: true});
+  fs.writeFileSync(target, JSON.stringify(out, null, 1)+'\n');
+  console.log('written '+target);
+});
